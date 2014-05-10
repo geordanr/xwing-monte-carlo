@@ -2,6 +2,7 @@
 package main
 
 import (
+    "math"
     "math/rand"
     "fmt"
     "time"
@@ -148,27 +149,76 @@ func (ship *Ship) AcquireTargetLock() *Ship {
     return ship
 }
 
+func (ship *Ship) SpendTargetLock() *Ship {
+    ship.hasTargetLock = false
+    return ship
+}
+
 func (ship *Ship) Attack(target *Ship) {
     fmt.Println("=== Attack! ===")
-    results := Roll(ship.attack, AttackDie)
-    fmt.Println(results)
-    if ship.focusTokens == 0 && results.blanks > 0 && ship.hasTargetLock {
+    attackResults := Roll(ship.attack, AttackDie)
+    fmt.Println(attackResults)
+    if ship.focusTokens == 0 && attackResults.blanks > 0 && ship.hasTargetLock {
 	fmt.Println("No focus but we have a target lock, reroll all misses")
-	results.RerollBlanksAndFocuses(AttackDie)
-	fmt.Println(results)
-    } else if results.blanks > 0 && ship.hasTargetLock {
+	attackResults.RerollBlanksAndFocuses(AttackDie)
+	ship.SpendTargetLock()
+	fmt.Println(attackResults)
+    } else if attackResults.blanks > 0 && ship.hasTargetLock {
 	fmt.Println("We have a target lock and focus, reroll only blanks")
-	results.RerollBlanks(AttackDie)
-	fmt.Println(results)
+	attackResults.RerollBlanks(AttackDie)
+	ship.SpendTargetLock()
+	fmt.Println(attackResults)
     }
-    if results.focuses > 0 && ship.focusTokens > 0 {
+    if attackResults.focuses > 0 && ship.focusTokens > 0 {
 	fmt.Println("Burning focus")
-	results.SpendFocus("attack")
+	attackResults.SpendFocus("attack")
 	ship.focusTokens--
     }
-    fmt.Println("Final attack results:", results)
+    fmt.Println("Final attack results:", attackResults)
 
+    totalHits := attackResults.hits + attackResults.crits
+
+    fmt.Println("--- Defense! ---")
+    defenseResults := Roll(target.defense, DefenseDie)
+    fmt.Println(defenseResults)
+    if defenseResults.evades >= totalHits {
+	fmt.Println("Naturally evaded all hits")
+	return
+    }
+
+    if defenseResults.focuses > 0 && target.focusTokens > 0 {
+	fmt.Println("Burning focus")
+	defenseResults.SpendFocus("defense")
+	target.focusTokens--
+    }
+    if defenseResults.evades >= totalHits {
+	fmt.Println("Evaded all hits after using focus")
+	return
+    }
+
+    for ; target.evadeTokens > 0; target.evadeTokens-- {
+	fmt.Println("Spending evade token...")
+	defenseResults.evades++
+	if defenseResults.evades >= totalHits {
+	    fmt.Println("Evaded all hits after burning evade")
+	    return
+	}
+    }
+
+    // cancel hits before crits
+    hitsCanceled := int(math.Min(float64(attackResults.hits), float64(defenseResults.evades)))
+    fmt.Println("Canceled", hitsCanceled, "hits")
+    attackResults.hits -= hitsCanceled
+    defenseResults.evades -= hitsCanceled
+
+    critsCanceled := int(math.Min(float64(attackResults.crits), float64(defenseResults.evades)))
+    fmt.Println("Canceled", critsCanceled, "crits")
+    attackResults.crits -= critsCanceled
+    defenseResults.evades -= critsCanceled
+
+    fmt.Println("Damage sustained:", attackResults)
 }
+
 
 func main() {
     rand.Seed(time.Now().Unix())
@@ -176,14 +226,29 @@ func main() {
     xwing := Ship{8, 3, 2, 3, 2, 0, 0, false}
     tiefighter := Ship{8, 2, 3, 3, 0, 0, 0, false}
 
+    fmt.Println("=== Unmodified both")
     xwing.Attack(&tiefighter)
+    xwing.CleanUp()
+    tiefighter.CleanUp()
 
+    fmt.Println("=== TL+F attack vs. Focus defense")
     xwing.Focus()
     xwing.AcquireTargetLock()
+    tiefighter.Focus()
     xwing.Attack(&tiefighter)
+    xwing.CleanUp()
+    tiefighter.CleanUp()
 
+    fmt.Println("=== Unmodified attack vs. Evade")
+    tiefighter.Evade()
     xwing.Attack(&tiefighter)
+    xwing.CleanUp()
+    tiefighter.CleanUp()
 
+    fmt.Println("=== Focus vs. Evade")
     xwing.Focus()
+    tiefighter.Evade()
     xwing.Attack(&tiefighter)
+    xwing.CleanUp()
+    tiefighter.CleanUp()
 }
