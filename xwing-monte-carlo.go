@@ -325,6 +325,19 @@ type Match struct {
 
 type MatchResult struct {
     winner Faction
+    shipsRemaining int
+}
+
+func (m MatchResult) String() (s string) {
+    switch f := m.winner; f {
+    case NEITHER:
+	s = "draw"
+    case REBELS:
+	s = fmt.Sprintf("Rebels with %d ships remaining", m.shipsRemaining)
+    case EMPIRE:
+	s = fmt.Sprintf("Empire with %d ships remaining", m.shipsRemaining)
+    }
+    return
 }
 
 func (match *Match) PerformCombatRound(performAction func(*Ship)) *MatchResult {
@@ -374,8 +387,37 @@ func (match *Match) PerformCombatRound(performAction func(*Ship)) *MatchResult {
 	}
     }
 
-    res := new(MatchResult)
-    return res
+    nRebelsRemaining, nImperialsRemaining := 0, 0
+    for _, ship := range(*match.rebelList) {
+	if !ship.isDestroyed {
+	    nRebelsRemaining++
+	}
+    }
+
+    for _, ship := range(*match.empireList) {
+	if !ship.isDestroyed {
+	    nImperialsRemaining++
+	}
+    }
+
+    switch {
+    case nRebelsRemaining > 0 && nImperialsRemaining > 0:
+	return nil
+    case nRebelsRemaining > 0:
+	result := new(MatchResult)
+	result.winner = REBELS
+	result.shipsRemaining = nRebelsRemaining
+	return result
+    case nImperialsRemaining > 0:
+	result := new(MatchResult)
+	result.winner = EMPIRE
+	result.shipsRemaining = nImperialsRemaining
+	return result
+    default:
+	result := new(MatchResult)
+	result.winner = NEITHER
+	return result
+    }
 }
 
 /*
@@ -384,7 +426,7 @@ func Play(match *Match) MatchResult {
 */
 
 func main() {
-    rand.Seed(time.Now().Unix())
+    rand.Seed(time.Now().UnixNano())
     xwing := &Ship{name: "Rookie Pilot", skill: 2, attack: 3, defense: 2, hull: 3, shields: 2}
     logger.Println(xwing)
     tiefighter := &Ship{name: "Academy Pilot", skill: 2, attack: 2, defense: 3, hull: 3}
@@ -430,30 +472,43 @@ func main() {
     tiefighter.CleanUp()
 */
 
-//luke := &Ship{faction: REBELS, name: "Luke Skywalker", skill: 8, attack: 3, defense: 2, hull: 3, shields: 2}
-    //porkins := &Ship{faction: REBELS, name: "Jek Porkins", skill: 7, attack: 3, defense: 2, hull: 3, shields: 2}
-    rookie1 := &Ship{faction: REBELS, name: "Rookie Pilot", skill: 2, attack: 3, defense: 2, hull: 3, shields: 2}
-    rookie2 := &Ship{faction: REBELS, name: "Rookie Pilot", skill: 2, attack: 3, defense: 2, hull: 3, shields: 2}
+    luke := &Ship{faction: REBELS, name: "Luke Skywalker", skill: 8, attack: 3, defense: 2, hull: 3, shields: 2}
+    porkins := &Ship{faction: REBELS, name: "Jek Porkins", skill: 7, attack: 3, defense: 2, hull: 3, shields: 2}
+    rookie1 := &Ship{faction: REBELS, name: "Rookie Pilot", skill: 8, attack: 3, defense: 2, hull: 3, shields: 2}
+    rookie2 := &Ship{faction: REBELS, name: "Rookie Pilot", skill: 7, attack: 3, defense: 2, hull: 3, shields: 2}
 
     // must be spelling this wrong
     rebels := NewSquadron([](*Ship){
 	rookie1,
-	//,porkins,
+	porkins,
 	rookie2,
-	//luke,
+	luke,
     })
 
-    //howlrunner := &Ship{faction: EMPIRE, name: "Howlrunner", skill: 8, attack: 2, defense: 3, hull: 3}
-    academy1 := &Ship{faction: EMPIRE, name: "Academy Pilot", skill: 2, attack: 2, defense: 3, hull: 3}
-    academy2 := &Ship{faction: EMPIRE, name: "Academy Pilot", skill: 2, attack: 2, defense: 3, hull: 3}
+    howlrunner := &Ship{faction: EMPIRE, name: "Howlrunner", skill: 8, attack: 2, defense: 3, hull: 3}
+    academy1 := &Ship{faction: EMPIRE, name: "Mauler Mithel", skill: 7, attack: 2, defense: 3, hull: 3, hasHowlrunnerReroll: true}
+    academy2 := &Ship{faction: EMPIRE, name: "Alpha Squadron Pilot", skill: 8, attack: 3, defense: 3, hull: 3, hasHowlrunnerReroll: true}
+    academy3 := &Ship{faction: EMPIRE, name: "Alpha Squadron Pilot", skill: 7, attack: 3, defense: 3, hull: 3, hasHowlrunnerReroll: true}
+    academy4 := &Ship{faction: EMPIRE, name: "Academy Pilot", skill: 1, attack: 2, defense: 3, hull: 3, hasHowlrunnerReroll: true}
+    academy5 := &Ship{faction: EMPIRE, name: "Academy Pilot", skill: 1, attack: 2, defense: 3, hull: 3, hasHowlrunnerReroll: true}
 
     imps := NewSquadron([](*Ship){
-	//howlrunner,
+	howlrunner,
 	academy1,
-	academy2})
+	academy2,
+	academy3,
+	academy4,
+	academy5,
+    })
+
+    focusAction := func (ship *Ship) {
+	ship.Focus()
+    }
 
     match := &Match{rebels, imps}
-    match.PerformCombatRound(func (ship *Ship){})
-    match.PerformCombatRound(func (ship *Ship){})
-    match.PerformCombatRound(func (ship *Ship){})
+    var result *MatchResult
+    for result == nil {
+	result = match.PerformCombatRound(focusAction)
+    }
+    logger.Println(*result)
 }
