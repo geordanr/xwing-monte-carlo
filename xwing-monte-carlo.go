@@ -11,7 +11,11 @@ import (
     "time"
 )
 
+//var devnull, _err = os.Create(os.DevNull)
 var logger = log.New(os.Stderr, "", log.LstdFlags)
+
+type Faction uint8
+var NEITHER, REBELS, EMPIRE Faction = 0, 1, 2
 
 type DieResult uint8
 var BLANK, FOCUS, HIT, CRIT, EVADE DieResult = 0, 1, 2, 3, 4
@@ -146,6 +150,7 @@ func DefenseDie() DieResult {
 
 type Ship struct {
     name string
+    faction Faction
     skill int
     attack int
     defense int
@@ -155,6 +160,7 @@ type Ship struct {
     evadeTokens int
     lockedOnto *Ship
     hasHowlrunnerReroll bool
+    isDestroyed bool
 }
 
 func (ship Ship) String() string {
@@ -188,7 +194,7 @@ func (ship *Ship) SpendTargetLock() *Ship {
 }
 
 func (ship *Ship) Attack(target *Ship) {
-    logger.Println("=== Attack! ===")
+    logger.Printf("=== %s is attacking %s ===\n", ship, target)
     attackResults := Roll(ship.attack, AttackDie)
     logger.Println(attackResults)
     if ship.focusTokens == 0 {
@@ -263,21 +269,127 @@ func (ship *Ship) Attack(target *Ship) {
     defenseResults.evades -= critsCanceled
 
     logger.Println("Damage sustained:", attackResults)
+
+    // all damage to shields first
+    // apply regular hits first
+    shieldDamage := int(math.Min(float64(attackResults.hits), float64(target.shields)))
+    logger.Println("Took", shieldDamage, "hits on shields")
+    attackResults.hits -= shieldDamage
+    target.shields -= shieldDamage
+    // then apply crits
+    if attackResults.hits == 0 && target.shields > 0 {
+	shieldDamage := int(math.Min(float64(attackResults.crits), float64(target.shields)))
+	logger.Println("Took", shieldDamage, "crits on shields")
+	attackResults.crits -= shieldDamage
+	target.shields -= shieldDamage
+    }
+
+    // apply damage to hull
+    if attackResults.hits > 0 {
+	logger.Println("Took", attackResults.hits, "hull damage")
+	target.hull -= attackResults.hits
+    }
+
+    // apply crits to hull, 7/33 chance of direct hit
+    for crit := 0; crit < attackResults.crits; crit++ {
+	if uint8(rand.Int31n(33)) < 7 {
+	    logger.Println("Direct Hit!")
+	    target.hull -= 2
+	} else {
+	    logger.Println("Suffered other crit")
+	    target.hull--
+	}
+    }
+
+    if target.hull < 1 {
+	logger.Println(target.name, "was destroyed!")
+	target.isDestroyed = true
+    }
 }
 
 type Squadron [](*Ship)
-
 func (s Squadron) Len() int { return len(s) }
 func (s Squadron) Less(i, j int) bool { return s[i].skill < s[j].skill }
 func (s Squadron) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
+func NewSquadron(l[](*Ship)) *Squadron {
+    s := Squadron(l)
+    sort.Sort(sort.Reverse(s))
+    return &s
+}
+
+type Match struct {
+    rebelList *Squadron
+    empireList *Squadron
+}
+
+type MatchResult struct {
+    winner Faction
+}
+
+func (match *Match) PerformCombatRound(performAction func(*Ship)) *MatchResult {
+    // returns match result if one side wins at the end, nil otherwise
+
+    // In descending pilot skill...
+    for ps := 12; ps > -1; ps-- {
+	// Gather eligible ships (not destroyed)
+	combatants := make([](*Ship), 0, len(*match.rebelList) + len(*match.empireList))
+	for _, ship := range(*match.rebelList) {
+	    if ship.skill == ps && !ship.isDestroyed {
+		combatants = append(combatants, ship)
+	    }
+	}
+
+	for _, ship := range(*match.empireList) {
+	    if ship.skill == ps && !ship.isDestroyed {
+		combatants = append(combatants, ship)
+	    }
+	}
+
+	// for simplicity's sake, combatants shoot at highest surviving PS in opposing list
+	// since we aren't resolving crit effects, initiative doesn't matter
+	for _, ship := range(combatants) {
+	    var enemy_list *Squadron
+	    var target *Ship
+
+	    switch ship.faction {
+	    case REBELS:
+		enemy_list = match.empireList
+	    case EMPIRE:
+		enemy_list = match.rebelList
+	    }
+	    for _, enemy_ship := range(*enemy_list) {
+		if !enemy_ship.isDestroyed {
+		    target = enemy_ship
+		    break
+		}
+	    }
+
+	    performAction(ship)
+
+	    // We don't break immediately if no targets are available because a draw could occur
+	    if target != nil {
+		ship.Attack(target)
+	    }
+	}
+    }
+
+    res := new(MatchResult)
+    return res
+}
+
+/*
+func Play(match *Match) MatchResult {
+}
+*/
+
 func main() {
     rand.Seed(time.Now().Unix())
-    xwing := &Ship{"X-Wing", 8, 3, 2, 3, 2, 0, 0, nil, false}
+    xwing := &Ship{name: "Rookie Pilot", skill: 2, attack: 3, defense: 2, hull: 3, shields: 2}
     logger.Println(xwing)
-    tiefighter := &Ship{"TIE Fighter", 8, 2, 3, 3, 0, 0, 0, nil, true}
+    tiefighter := &Ship{name: "Academy Pilot", skill: 2, attack: 2, defense: 3, hull: 3}
     logger.Println(tiefighter)
-
+/*
     logger.Println("=== Unmodified both")
     xwing.Attack(tiefighter)
     xwing.CleanUp()
@@ -316,16 +428,32 @@ func main() {
     tiefighter.Attack(xwing)
     xwing.CleanUp()
     tiefighter.CleanUp()
+*/
 
-    luke := &Ship{"X-Wing", 8, 3, 2, 3, 2, 0, 0, nil, false}
-    porkins := &Ship{"X-Wing", 7, 3, 2, 3, 2, 0, 0, nil, false}
-    rookie1 := &Ship{"X-Wing", 2, 3, 2, 3, 2, 0, 0, nil, false}
-    rookie2 := &Ship{"X-Wing", 2, 3, 2, 3, 2, 0, 0, nil, false}
+//luke := &Ship{faction: REBELS, name: "Luke Skywalker", skill: 8, attack: 3, defense: 2, hull: 3, shields: 2}
+    //porkins := &Ship{faction: REBELS, name: "Jek Porkins", skill: 7, attack: 3, defense: 2, hull: 3, shields: 2}
+    rookie1 := &Ship{faction: REBELS, name: "Rookie Pilot", skill: 2, attack: 3, defense: 2, hull: 3, shields: 2}
+    rookie2 := &Ship{faction: REBELS, name: "Rookie Pilot", skill: 2, attack: 3, defense: 2, hull: 3, shields: 2}
 
     // must be spelling this wrong
-    s := Squadron([](*Ship){rookie1, porkins, rookie2, luke})
-    log.Println(s)
-    sort.Sort(sort.Reverse(s))
-    log.Println(s)
+    rebels := NewSquadron([](*Ship){
+	rookie1,
+	//,porkins,
+	rookie2,
+	//luke,
+    })
 
+    //howlrunner := &Ship{faction: EMPIRE, name: "Howlrunner", skill: 8, attack: 2, defense: 3, hull: 3}
+    academy1 := &Ship{faction: EMPIRE, name: "Academy Pilot", skill: 2, attack: 2, defense: 3, hull: 3}
+    academy2 := &Ship{faction: EMPIRE, name: "Academy Pilot", skill: 2, attack: 2, defense: 3, hull: 3}
+
+    imps := NewSquadron([](*Ship){
+	//howlrunner,
+	academy1,
+	academy2})
+
+    match := &Match{rebels, imps}
+    match.PerformCombatRound(func (ship *Ship){})
+    match.PerformCombatRound(func (ship *Ship){})
+    match.PerformCombatRound(func (ship *Ship){})
 }
