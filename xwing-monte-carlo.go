@@ -11,8 +11,8 @@ import (
     "time"
 )
 
-//var devnull, _err = os.Create(os.DevNull)
-var logger = log.New(os.Stderr, "", log.LstdFlags)
+var devnull, _err = os.Create(os.DevNull)
+var logger = log.New(devnull, "", log.LstdFlags)
 
 type Faction uint8
 var NEITHER, REBELS, EMPIRE Faction = 0, 1, 2
@@ -160,6 +160,7 @@ type Ship struct {
     evadeTokens int
     lockedOnto *Ship
     hasHowlrunnerReroll bool
+    providesHowlrunnerReroll bool
     isDestroyed bool
 }
 
@@ -205,7 +206,7 @@ func (ship *Ship) Attack(target *Ship) {
 	    ship.SpendTargetLock()
 	    logger.Println(attackResults)
 	} else if ship.hasHowlrunnerReroll && (attackResults.blanks > 0 || attackResults.focuses > 0) {
-	    logger.Println("No focus but we have a reroll from Howlrunner")
+	    logger.Printf("No focus but %s (PS %d) has a reroll from Howlrunner\n", ship.name, ship.skill)
 	    attackResults.RerollOneBlankOrFocus(AttackDie)
 	    logger.Println(attackResults)
 	}
@@ -216,7 +217,7 @@ func (ship *Ship) Attack(target *Ship) {
 	    ship.SpendTargetLock()
 	    logger.Println(attackResults)
 	} else if ship.hasHowlrunnerReroll {
-	    logger.Println("Reroll blank from Howlrunner")
+	    logger.Printf("%s (PS %d) rerolls blank from Howlrunner\n", ship.name, ship.skill)
 	    attackResults.RerollOneBlank(AttackDie)
 	    logger.Println(attackResults)
 	}
@@ -342,9 +343,18 @@ func (m MatchResult) String() (s string) {
 
 func (match *Match) PerformCombatRound(performAction func(*Ship)) *MatchResult {
     // returns match result if one side wins at the end, nil otherwise
+    logger.Println("=== New Combat Round ===")
 
     // In descending pilot skill...
     for ps := 12; ps > -1; ps-- {
+	// For later use: check if Howlrunner is alive
+	howlrunnerRerollAvailable := false
+	for _, ship := range(*match.empireList) {
+	    if ship.providesHowlrunnerReroll && !ship.isDestroyed {
+		howlrunnerRerollAvailable = true
+	    }
+	}
+
 	// Gather eligible ships (not destroyed)
 	combatants := make([](*Ship), 0, len(*match.rebelList) + len(*match.empireList))
 	for _, ship := range(*match.rebelList) {
@@ -355,6 +365,9 @@ func (match *Match) PerformCombatRound(performAction func(*Ship)) *MatchResult {
 
 	for _, ship := range(*match.empireList) {
 	    if ship.skill == ps && !ship.isDestroyed {
+		if !ship.providesHowlrunnerReroll {
+		    ship.hasHowlrunnerReroll = howlrunnerRerollAvailable
+		}
 		combatants = append(combatants, ship)
 	    }
 	}
@@ -420,95 +433,85 @@ func (match *Match) PerformCombatRound(performAction func(*Ship)) *MatchResult {
     }
 }
 
-/*
-func Play(match *Match) MatchResult {
+func (match *Match) Play(c chan MatchResult, performAction func(*Ship)) {
+    var result *MatchResult
+    for result == nil {
+	result = match.PerformCombatRound(performAction)
+    }
+    c <- *result
 }
-*/
+
+type AggregateResults struct {
+    rebelWins int
+    empireWins int
+    draws int
+}
+func (a AggregateResults) String() string {
+    return fmt.Sprintf("Rebel wins: %d\nEmpire wins: %d\nDraws: %d", a.rebelWins, a.empireWins, a.draws)
+}
 
 func main() {
     rand.Seed(time.Now().UnixNano())
-    xwing := &Ship{name: "Rookie Pilot", skill: 2, attack: 3, defense: 2, hull: 3, shields: 2}
-    logger.Println(xwing)
-    tiefighter := &Ship{name: "Academy Pilot", skill: 2, attack: 2, defense: 3, hull: 3}
-    logger.Println(tiefighter)
-/*
-    logger.Println("=== Unmodified both")
-    xwing.Attack(tiefighter)
-    xwing.CleanUp()
-    tiefighter.CleanUp()
-
-    logger.Println("=== TL+F attack vs. Focus defense")
-    xwing.Focus()
-    xwing.AcquireTargetLock(tiefighter)
-    tiefighter.Focus()
-    xwing.Attack(tiefighter)
-    xwing.CleanUp()
-    tiefighter.CleanUp()
-
-    logger.Println("=== Unmodified attack vs. Evade")
-    tiefighter.Evade()
-    xwing.Attack(tiefighter)
-    xwing.CleanUp()
-    tiefighter.CleanUp()
-
-    logger.Println("=== Focus vs. Evade")
-    xwing.Focus()
-    tiefighter.Evade()
-    xwing.Attack(tiefighter)
-    xwing.CleanUp()
-    tiefighter.CleanUp()
-
-
-    logger.Println("=== TIE Attack ===")
-    logger.Println("=== Howlrunner only")
-    tiefighter.Attack(xwing)
-    xwing.CleanUp()
-    tiefighter.CleanUp()
-
-    logger.Println("=== Howlrunner with Focus")
-    tiefighter.Focus()
-    tiefighter.Attack(xwing)
-    xwing.CleanUp()
-    tiefighter.CleanUp()
-*/
-
-    luke := &Ship{faction: REBELS, name: "Luke Skywalker", skill: 8, attack: 3, defense: 2, hull: 3, shields: 2}
-    porkins := &Ship{faction: REBELS, name: "Jek Porkins", skill: 7, attack: 3, defense: 2, hull: 3, shields: 2}
-    rookie1 := &Ship{faction: REBELS, name: "Rookie Pilot", skill: 8, attack: 3, defense: 2, hull: 3, shields: 2}
-    rookie2 := &Ship{faction: REBELS, name: "Rookie Pilot", skill: 7, attack: 3, defense: 2, hull: 3, shields: 2}
-
-    // must be spelling this wrong
-    rebels := NewSquadron([](*Ship){
-	rookie1,
-	porkins,
-	rookie2,
-	luke,
-    })
-
-    howlrunner := &Ship{faction: EMPIRE, name: "Howlrunner", skill: 8, attack: 2, defense: 3, hull: 3}
-    academy1 := &Ship{faction: EMPIRE, name: "Mauler Mithel", skill: 7, attack: 2, defense: 3, hull: 3, hasHowlrunnerReroll: true}
-    academy2 := &Ship{faction: EMPIRE, name: "Alpha Squadron Pilot", skill: 8, attack: 3, defense: 3, hull: 3, hasHowlrunnerReroll: true}
-    academy3 := &Ship{faction: EMPIRE, name: "Alpha Squadron Pilot", skill: 7, attack: 3, defense: 3, hull: 3, hasHowlrunnerReroll: true}
-    academy4 := &Ship{faction: EMPIRE, name: "Academy Pilot", skill: 1, attack: 2, defense: 3, hull: 3, hasHowlrunnerReroll: true}
-    academy5 := &Ship{faction: EMPIRE, name: "Academy Pilot", skill: 1, attack: 2, defense: 3, hull: 3, hasHowlrunnerReroll: true}
-
-    imps := NewSquadron([](*Ship){
-	howlrunner,
-	academy1,
-	academy2,
-	academy3,
-	academy4,
-	academy5,
-    })
 
     focusAction := func (ship *Ship) {
 	ship.Focus()
     }
 
-    match := &Match{rebels, imps}
-    var result *MatchResult
-    for result == nil {
-	result = match.PerformCombatRound(focusAction)
+    ch := make(chan MatchResult)
+
+    nIterations := 1000
+    results := new(AggregateResults)
+
+    for i := 0; i < nIterations; i++ {
+	luke := &Ship{faction: REBELS, name: "Luke Skywalker", skill: 8, attack: 3, defense: 2, hull: 3, shields: 2}
+	porkins := &Ship{faction: REBELS, name: "Jek Porkins", skill: 7, attack: 3, defense: 2, hull: 3, shields: 2}
+	rookie1 := &Ship{faction: REBELS, name: "Rookie Pilot", skill: 8, attack: 3, defense: 2, hull: 3, shields: 2}
+	rookie2 := &Ship{faction: REBELS, name: "Rookie Pilot", skill: 7, attack: 3, defense: 2, hull: 3, shields: 2}
+
+	// must be spelling this wrong
+	rebels := NewSquadron([](*Ship){
+	    luke,
+	    porkins,
+	    rookie1,
+	    rookie2,
+	})
+
+	howlrunner := &Ship{faction: EMPIRE, name: "Howlrunner", skill: 8, attack: 2, defense: 3, hull: 3, providesHowlrunnerReroll: true}
+	academy1 := &Ship{faction: EMPIRE, name: "Mauler Mithel", skill: 7, attack: 2, defense: 3, hull: 3}
+	academy2 := &Ship{faction: EMPIRE, name: "Alpha Squadron Pilot", skill: 8, attack: 3, defense: 3, hull: 3}
+	academy3 := &Ship{faction: EMPIRE, name: "Alpha Squadron Pilot", skill: 7, attack: 3, defense: 3, hull: 3}
+	academy4 := &Ship{faction: EMPIRE, name: "Academy Pilot", skill: 1, attack: 2, defense: 3, hull: 3}
+	academy5 := &Ship{faction: EMPIRE, name: "Academy Pilot", skill: 1, attack: 2, defense: 3, hull: 3}
+
+	imps := NewSquadron([](*Ship){
+	    howlrunner,
+	    academy1,
+	    academy2,
+	    academy3,
+	    academy4,
+	    academy5,
+	})
+
+	match := &Match{rebels, imps}
+	go match.Play(ch, focusAction)
     }
-    logger.Println(*result)
+
+    resultsReceived := 0
+    for resultsReceived < nIterations {
+	var result MatchResult
+	select {
+	case result = <-ch:
+	    resultsReceived++
+	    switch result.winner {
+	    case REBELS:
+		results.rebelWins++
+	    case EMPIRE:
+		results.empireWins++
+	    default:
+		results.draws++
+	    }
+	}
+    }
+
+    fmt.Println(*results)
 }
